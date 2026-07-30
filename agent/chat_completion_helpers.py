@@ -535,13 +535,24 @@ def should_use_direct_api_call(agent) -> bool:
 
     Keep native/Codex/Bedrock/MoA transports on their established workers:
     their cancellation and client ownership differ.
+
+    Provider narrowing (#71268): only providers known to exhibit the
+    nested-pool wedge — openrouter and nous portal — are forced to
+    non-streaming. Custom/local endpoints (e.g. newapi2 reverse proxy) are
+    excluded so they benefit from streaming — critical for models with long
+    reasoning content that would otherwise exceed the 600s cron inactivity
+    timeout on non-streaming calls.
     """
     if getattr(agent, "api_mode", None) != "chat_completions":
         return False
     if getattr(agent, "provider", None) == "moa":
         return False
+
+    _provider = getattr(agent, "provider", None) or ""
+    _wedge_providers = {"openrouter", "nous"}
+
     if getattr(agent, "platform", None) == "cron":
-        return True
+        return _provider in _wedge_providers
     # Delegated child (delegate_task sync or background) — detected via the
     # execution ContextVar set by _run_single_child, with the agent's own
     # platform stamp as a fallback for callers that bypass the runner.
@@ -549,10 +560,10 @@ def should_use_direct_api_call(agent) -> bool:
         from agent.delegation_context import is_delegated_child_context
 
         if is_delegated_child_context():
-            return True
+            return _provider in _wedge_providers
     except Exception:
         pass
-    return getattr(agent, "platform", None) == "subagent"
+    return getattr(agent, "platform", None) == "subagent" and _provider in _wedge_providers
 
 
 def direct_api_call(agent, api_kwargs: dict):
